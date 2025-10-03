@@ -1,0 +1,10 @@
+# Ignore virtual environments
+venv/
+nenv/
+
+# Ignore Python cache
+__pycache__/
+
+# Ignore local configs/secrets
+cookies.txt
+*.env
