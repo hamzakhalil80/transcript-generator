@@ -29,12 +29,13 @@ def extract_transcript(video_id: str):
 
     # ✅ Create cookies.txt dynamically from environment variable if present
     if "YOUTUBE_COOKIES" in os.environ:
-        with open("cookies.txt", "w", encoding="utf-8") as f:
+        cookie_file = "cookies.txt"
+        with open(cookie_file, "w", encoding="utf-8") as f:
             f.write(os.environ["YOUTUBE_COOKIES"])
 
     ydl_opts = {
         "skip_download": True,
-        "cookiefile": "cookies.txt" if os.path.exists("cookies.txt") else None
+        "cookiefile": cookie_file,   # ✅ ensure yt-dlp uses it
     }
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
