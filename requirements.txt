@@ -1,3 +1,6 @@
-fastapi==0.95.2
-uvicorn==0.22.0
-youtube-transcript-api==0.6.2
+fastapi
+uvicorn
+yt-dlp
+requests
+reportlab
+python-docx
