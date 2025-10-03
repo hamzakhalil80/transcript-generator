@@ -1,8 +1,7 @@
-# main.py
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse
-import yt_dlp, requests
+import yt_dlp, requests, os   # 👈 added os
 from io import BytesIO
 from reportlab.lib.pagesizes import letter
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
@@ -27,7 +26,17 @@ def extract_transcript(video_id: str):
     Returns video info and transcript list [{start, text}, ...]
     """
     url = f"https://www.youtube.com/watch?v={video_id}"
-    ydl_opts = {"skip_download": True}
+
+    # ✅ Create cookies.txt dynamically from environment variable if present
+    if "YOUTUBE_COOKIES" in os.environ:
+        with open("cookies.txt", "w", encoding="utf-8") as f:
+            f.write(os.environ["YOUTUBE_COOKIES"])
+
+    ydl_opts = {
+        "skip_download": True,
+        "cookiefile": "cookies.txt" if os.path.exists("cookies.txt") else None
+    }
+
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=False)
 
@@ -108,6 +117,9 @@ async def get_transcript(video_id: str):
             "transcript": [{"text": p} for p in paragraphs]
         }
     except Exception as e:
+        # 👇 Helpful error if cookies expired
+        if "sign in" in str(e).lower() or "private" in str(e).lower():
+            return {"status": "error", "message": "YouTube cookies may be expired. Please update YOUTUBE_COOKIES in Render."}
         return {"status": "error", "message": str(e)}
 
 
