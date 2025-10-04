@@ -6,5 +6,5 @@ nenv/
 __pycache__/
 
 # Ignore local configs/secrets
-cookies.txt
+cookies_*.txt
 *.env
