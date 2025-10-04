@@ -1,10 +1,10 @@
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response, StreamingResponse
-import yt_dlp, requests, os   # 👈 added os
+from fastapi.responses import Response
+import yt_dlp, requests, re
 from io import BytesIO
 from reportlab.lib.pagesizes import letter
-from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
+from reportlab.platypus import Paragraph, SimpleDocTemplate
 from reportlab.lib.styles import getSampleStyleSheet
 from docx import Document
 
@@ -26,18 +26,7 @@ def extract_transcript(video_id: str):
     Returns video info and transcript list [{start, text}, ...]
     """
     url = f"https://www.youtube.com/watch?v={video_id}"
-
-    # ✅ Create cookies.txt dynamically from environment variable if present
-    if "YOUTUBE_COOKIES" in os.environ:
-        cookie_file = "cookies.txt"
-        with open(cookie_file, "w", encoding="utf-8") as f:
-            f.write(os.environ["YOUTUBE_COOKIES"])
-
-    ydl_opts = {
-        "skip_download": True,
-        "cookiefile": cookie_file,   # ✅ ensure yt-dlp uses it
-    }
-
+    ydl_opts = {"skip_download": True}
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=False)
 
@@ -69,34 +58,29 @@ def extract_transcript(video_id: str):
         return info, transcript
 
 
-# -------- Merge transcript into natural paragraphs ----------
-def merge_paragraphs(transcript, max_chars=300, max_gap=8):
-    """
-    Merge transcript lines into paragraphs.
-    - max_chars: approx max characters per paragraph
-    - max_gap: seconds of silence that trigger a new paragraph
-    """
-    paragraphs = []
-    current = ""
-    count = 0
-
-    for i, line in enumerate(transcript):
-        text = (line.get("text") or "").strip()
+# -------- Merge transcript into paragraphs ----------
+def merge_paragraphs(transcript, chunk_size=3):
+    lines = []
+    for t in transcript:
+        text = t.get("text", "").strip()
         if not text:
             continue
         if text.lower() in ["[applause]", "(applause)", "[music]", "(music)"]:
             continue
+        # Capitalize first letter if missing
+        if text and not text[0].isupper():
+            text = text[0].upper() + text[1:]
+        lines.append(text)
 
-        current += (" " if current else "") + text
-        count += len(text)
-
-        next_line = transcript[i+1] if i+1 < len(transcript) else None
-        long_pause = next_line and (next_line["start"] - line["start"] > max_gap)
-
-        if count > max_chars or long_pause or not next_line:
-            paragraphs.append(current.strip())
-            current = ""
-            count = 0
+    # Group into paragraphs
+    paragraphs, chunk = [], []
+    for i, line in enumerate(lines, 1):
+        chunk.append(line)
+        if i % chunk_size == 0:
+            paragraphs.append(" ".join(chunk))
+            chunk = []
+    if chunk:
+        paragraphs.append(" ".join(chunk))
 
     return paragraphs
 
@@ -118,21 +102,18 @@ async def get_transcript(video_id: str):
             "transcript": [{"text": p} for p in paragraphs]
         }
     except Exception as e:
-        # 👇 Helpful error if cookies expired
-        if "sign in" in str(e).lower() or "private" in str(e).lower():
-            return {"status": "error", "message": "YouTube cookies may be expired. Please update YOUTUBE_COOKIES in Render."}
         return {"status": "error", "message": str(e)}
 
 
 # -------- TXT ----------
 @app.get("/transcript/{video_id}/download/txt")
-async def download_txt(video_id: str):
+async def download_txt(video_id: str, chunk_size: int = Query(3, ge=1, le=20)):
     try:
         info, transcript = extract_transcript(video_id)
         if not transcript:
             return Response("No English captions found", media_type="text/plain")
 
-        paragraphs = merge_paragraphs(transcript)
+        paragraphs = merge_paragraphs(transcript, chunk_size)
         content = "\n\n".join(paragraphs)
 
         safe_title = "".join(c if c.isalnum() or c in " -_." else "_" for c in info.get("title", video_id))
@@ -149,13 +130,13 @@ async def download_txt(video_id: str):
 
 # -------- PDF ----------
 @app.get("/transcript/{video_id}/download/pdf")
-async def download_pdf(video_id: str):
+async def download_pdf(video_id: str, chunk_size: int = Query(3, ge=1, le=20)):
     try:
         info, transcript = extract_transcript(video_id)
         if not transcript:
             return Response("No English captions found", media_type="application/pdf")
 
-        paragraphs = merge_paragraphs(transcript)
+        paragraphs = merge_paragraphs(transcript, chunk_size)
 
         buffer = BytesIO()
         doc = SimpleDocTemplate(buffer, pagesize=letter)
@@ -163,20 +144,18 @@ async def download_pdf(video_id: str):
         story = []
 
         story.append(Paragraph(f"<b>{info.get('title', 'Transcript')}</b>", styles["Title"]))
-        story.append(Spacer(1, 12))
-
         for p in paragraphs:
             story.append(Paragraph(p, styles["Normal"]))
-            story.append(Spacer(1, 12))
 
         doc.build(story)
-        buffer.seek(0)
+        pdf_data = buffer.getvalue()
+        buffer.close()
 
         safe_title = "".join(c if c.isalnum() or c in " -_." else "_" for c in info.get("title", video_id))
         filename = f"{safe_title}.pdf"
 
-        return StreamingResponse(
-            buffer,
+        return Response(
+            pdf_data,
             media_type="application/pdf",
             headers={"Content-Disposition": f'attachment; filename="{filename}"'}
         )
@@ -186,13 +165,13 @@ async def download_pdf(video_id: str):
 
 # -------- DOCX ----------
 @app.get("/transcript/{video_id}/download/docx")
-async def download_docx(video_id: str):
+async def download_docx(video_id: str, chunk_size: int = Query(3, ge=1, le=20)):
     try:
         info, transcript = extract_transcript(video_id)
         if not transcript:
             return Response("No English captions found", media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
 
-        paragraphs = merge_paragraphs(transcript)
+        paragraphs = merge_paragraphs(transcript, chunk_size)
 
         doc = Document()
         doc.add_heading(info.get("title", "Transcript"), level=1)
@@ -206,8 +185,8 @@ async def download_docx(video_id: str):
         safe_title = "".join(c if c.isalnum() or c in " -_." else "_" for c in info.get("title", video_id))
         filename = f"{safe_title}.docx"
 
-        return StreamingResponse(
-            buffer,
+        return Response(
+            buffer.getvalue(),
             media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             headers={"Content-Disposition": f'attachment; filename="{filename}"'}
         )
