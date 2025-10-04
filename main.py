@@ -21,6 +21,27 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ----------------------------
+# Auto-create cookie files from environment variables (optional)
+# ----------------------------
+# If you set env vars COOKIE_1..COOKIE_6 in Render (or other host),
+# this block will write them to cookies_1.txt .. cookies_6.txt on app start.
+# This lets you avoid uploading actual files into the container (works on free Render).
+MAX_COOKIE_ENV_BYTES = 200_000  # safety cap (200 KB)
+for i in range(1, 7):  # adjust if you have more/less cookie env vars
+    env_name = f"COOKIE_{i}"
+    cookie_value = os.getenv(env_name)
+    if cookie_value:
+        if len(cookie_value) > MAX_COOKIE_ENV_BYTES:
+            print(f"[WARN] {env_name} is very large ({len(cookie_value)} bytes). Skipping write to cookies_{i}.txt.")
+            continue
+        try:
+            with open(f"cookies_{i}.txt", "w", encoding="utf-8") as f:
+                f.write(cookie_value)
+            print(f"[INFO] Wrote cookies_{i}.txt from env var {env_name}")
+        except Exception as e:
+            print(f"[ERROR] Failed writing cookies_{i}.txt from env var {env_name}: {e}")
+
 # In-memory list of preferred cookies (keeps working cookies at the front)
 preferred_cookies: List[str] = []
 
